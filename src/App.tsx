@@ -15,7 +15,7 @@ function App() {
             </h1>
 
             <p className="text-xl text-slate-600 leading-relaxed mb-10 text-center max-w-2xl">
-              SWE Intern @ Meta - PittCSC Events Coordinator - working with low-level systems
+              2x SWE Intern @ Meta - PittCSC Vice President - making things
             </p>
 
             <div className="flex gap-5">
