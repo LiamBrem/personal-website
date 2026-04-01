@@ -1,4 +1,5 @@
-const e=`title: Why You Should Use Vim For Every One of Your School Assignments
+const e=`---
+title: Why You Should Use Vim For Every One of Your School Assignments
 date: 2026-03-31
 description: How vim will make you smarter
 ---
