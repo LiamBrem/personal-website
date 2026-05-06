@@ -7,11 +7,11 @@ import BlogPost from './pages/BlogPost';
 function App() {
   return (
     <HashRouter>
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 to-slate-900">
+      <div className="min-h-screen bg-black text-white">
         <Navbar />
         <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/blog" element={<Blog />} />
+          <Route path="/" element={<Home />} />
+          <Route path="/blog" element={<Blog />} />
           <Route path="/blog/:slug" element={<BlogPost />} />
         </Routes>
       </div>

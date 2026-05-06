@@ -10,25 +10,36 @@ export default function Blog() {
   }, []);
 
   return (
-    <div>
-      <div className="max-w-3xl mx-auto px-6 py-16">
-        <h1 className="text-5xl font-bold text-slate-50 mb-3">Blog</h1>
-        <p className="text-lg text-slate-400 mb-12">Thoughts on engineering, systems, and whatever else is on my mind.</p>
+    <div className="pt-[65px]">
+      <div className="max-w-4xl mx-auto px-8 py-24">
+        <p
+          className="text-xs text-gray-500 tracking-widest uppercase mb-4"
+          style={{ fontFamily: "'Space Mono', monospace" }}
+        >
+          Blog
+        </p>
+        <h1 className="text-5xl font-bold text-white mb-3">Writing</h1>
+        <p className="text-gray-500 mb-16">Thoughts on engineering, systems, and whatever else is on my mind.</p>
 
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col divide-y divide-white/10">
           {posts.map((post) => (
             <Link
               key={post.slug}
               to={`/blog/${post.slug}`}
-              className="bg-slate-800 rounded-2xl shadow-md hover:shadow-xl hover:bg-slate-700 transition-all duration-200 p-7 group"
+              className="py-8 group flex flex-col md:flex-row md:items-start md:justify-between gap-3 hover:opacity-80 transition-opacity"
             >
-              <p className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">
+              <div className="flex-1">
+                <h2 className="text-lg font-semibold text-white mb-2 group-hover:text-gray-300 transition-colors">
+                  {post.title}
+                </h2>
+                <p className="text-gray-500 text-sm leading-relaxed">{post.description}</p>
+              </div>
+              <p
+                className="text-xs text-gray-600 tracking-wider uppercase shrink-0 md:pt-1"
+                style={{ fontFamily: "'Space Mono', monospace" }}
+              >
                 {post.date}
               </p>
-              <h2 className="text-xl font-bold text-slate-100 mb-2 group-hover:text-blue-400 transition-colors duration-150">
-                {post.title}
-              </h2>
-              <p className="text-slate-400 leading-relaxed">{post.description}</p>
             </Link>
           ))}
         </div>

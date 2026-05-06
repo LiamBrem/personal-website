@@ -3,6 +3,12 @@
 @tailwind utilities;
 
 html, body {
-  background-color: #020617; /* slate-950 */
-  color-scheme: dark;
+  background-color: #000000;
+  color: #ffffff;
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
