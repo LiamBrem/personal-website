@@ -56,7 +56,16 @@ const turndown = new TurndownService({
 });
 
 async function main() {
-  const res = await fetch(FEED_URL);
+  const res = await fetch(FEED_URL, {
+    headers: {
+      // Substack's Cloudflare bot protection 403s requests from generic
+      // HTTP clients (including GitHub Actions runners) without a
+      // browser-like User-Agent.
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Accept: 'application/rss+xml, application/xml, text/xml, */*',
+    },
+  });
   if (!res.ok) {
     throw new Error(`Failed to fetch Substack feed: ${res.status} ${res.statusText}`);
   }
