@@ -1,0 +1,156 @@
+const e=`---
+title: "Why Meta Built Their Own C++ Concurrency Ecosystem"
+date: 2026-08-06
+description: "When the C++ standard library isn't enough"
+---
+
+[Liam Brem](https://substack.com/profile/476691674-liam-brem)[Why Meta Built Their Own C++ Concurrency Ecosystem](https://liambrem.substack.com/p/why-meta-built-their-own-c-concurrency)When the C++ standard library isn't enough[![Liam Brem's avatar](https://substackcdn.com/image/fetch/$s_!xsUi!,w_36,h_36,c_fill,f_webp,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F5a4e9705-3f70-4aef-9f72-cfe56427fec5_3106x3106.jpeg)](https://substack.com/@liambrem)[Liam Brem](https://substack.com/@liambrem)Aug 06, 2026
+
+---
+
+
+
+After completing an internship at Meta, one thing that really interested me was how Meta seems to have its own “version” of everything. This extends from entire internal products all the way down to C++ synchronization primitives. Here, I want to take a look at some of these primitives and compare them to their standard library counterparts.
+
+
+
+# History
+
+
+
+[Folly](https://github.com/facebook/folly) is a collection of various C++ components that are used throughout Meta and was open sourced on GitHub in 2012. Not only did it contain custom implementations of C++ std features (\`std::vector → folly::fbvector\`), but there were also unique additions to the library such as \`SmallLocks\`.
+
+
+
+Throughout Meta’s history, we can see a recurring pattern: whenever the standard library wouldn’t cut it (too slow, too much memory), Meta would build an internal solution and then open source it.
+
+
+
+Here are some key additions throughout folly’s history:
+
+
+
+- **2012** (C++11)
+
+
+
+- Core containers (\`fbstring\`, \`fbvector\`), \`PackedSyncPtr\`, \`SmallLocks\`, \`MPMCQueue\`
+- **2014-2016**(C++14)
+
+
+
+- \`Futures\`/\`Promises\`, \`Synchronized\`, \`SharedMutex\`, \`Hazptr\`, \`ConcurrentHashMap\`
+- **2018**(C++17)
+
+
+
+- \`folly::coro\` (coroutines begin in fbcode production)
+- **2020-2021**(C++17/20)
+
+
+
+- Coroutines in \`xplat\`, Unifex (sender/receiver model)
+- **2024-Present**(C++20)
+
+
+
+- Full coroutine adoption, structured concurrency patterns
+
+
+What piqued my interest the most was the extensive set of custom synchronization/concurrency primitives. These go well beyond what std offers and are customized for Meta’s specific performance goals. I’ve curated a set of some that I found particularly interesting and will explain them below:
+
+
+
+# Examples
+
+
+
+#### folly:SharedMutex
+
+
+
+If you’ve ever done any sort of concurrency in C++, then you’re likely aware of the \`std::shared_mutex\`. If not, a [shared mutex](https://en.cppreference.com/cpp/thread/shared_mutex) is a mutex (duh!) that allows multiple threads to acquire a lock to simultaneously read shared data. It also has the option to be *exclusive*, where only 1 thread may write to it it.
+
+
+
+Folly’s \`SharedMutex\`operates in the same way; however, it’s through its implementation that folly is really able to squeeze out more performance. \`std::shared_mutex\`requires a write to a shared cache line to acquire in shared mode. This means that every time a thread wants to acquire the shared lock to read some data, it invalidates the cache line in every other core, leading to [cache line ping-ponging](https://www.jabperf.com/cracking-down-on-unsanctioned-cache-ping-pong-games/) with concurrent readers. \`folly::SharedMutex\`solves this by using *deferred readers,*where each core writes to its own slot in a separate array instead of the same cache line as all the other readers.
+
+
+
+The tradeoff is that when a writer needs exclusive access, it must scan all slots to find the readers (taking significantly longer). However, this makes the SharedMutex much more efficient for read-heavy workloads which engineers had determined was more common throughout Meta.
+
+
+
+#### folly::ParkingLot
+
+
+
+This one’s name originally stood out to me, and it functions similarly to linux’s [futex](https://man7.org/linux/man-pages/man2/futex.2.html) syscall. A parking lot works by having threads “park” (sleep) until another thread “unparks” (wakes) them. Simple, right? This sounds awfully similar to a condition variable, and the ParkingLot *is*implemented using \`std::condition_variable\`s. The key difference is that instead of waiting on on a shared variable to be modified, another thread can decide to wake up whatever threads it wants.
+
+
+
+ParkingLot is something you’d likely never use in application code, but it’s the foundation for a lot of other concurrency primitives that Meta uses.
+
+
+
+The biggest reason ParkingLot exists over just using condvars everywhere is the memory/cache tradeoff. With a condvar, every object that might be waited on permanently pays ~80 bytes. With ParkingLot, the per-object cost is just a 4-byte atomic because the condvar only materializes temporarily on the stack when a thread actually blocks. At scale, this reclaims hundreds of MB of cache-useful memory.
+
+
+
+There are currently no exact std C++ alternatives to this. The closest would be \`std::atomic::wait/notify\`, but those lack features such as check-and-park, selective waking, and data attachments.
+
+
+
+#### folly::ConcurrentHashMap
+
+
+
+This is a high-performance concurrent hash map that supports wait-free reads and sharded writes (where writes only lock a portion of the hash map). A concurrent hash map isn’t that novel of an idea, and folly’s was inspired by Java’s \`ConcurrentHashMap\`. However, there are some implementation details that makes it unique:
+
+
+
+- \`find()\` vs \`contains()\`- When dealing with concurrency, contains can often lead to TOCTOU race conditions. Folly’s solution for that is to just delete the element after calling contains(). If you want to hold onto that element, the find() method returns an iterator that points to the element in memory and prevents it from being deleted.
+- **Hazard pointer-based memory reclamation** - When you \`erase()\` a key, the node is unlinked from the map (so invisible to new lookups), but not freed. Other threads might still hold iterators pointing to it. Folly uses hazard pointers to track which nodes are in use and only reclaim memory once no thread holds a reference. This is what makes reads truly wait-free; the readers never block, and they never access freed memory.
+- **Lazy shard allocation** - The map is divided into 256 shards, but shards aren’t allocated until first write. \`ensureSegment()\` uses a CAS (compare-and-swap) to race-free initialize a shard on first access. If you only touches a subset of the hashmap key space, you never pay for the unused shards.
+- \`assign_if_equal(key, expected, desired)\` - Since \`find()\` doesn’t take a lock, you can’t do a traditional read-modify-write. Instead, the map provides a CAS-style update: “set the value to \`desired\` only if the current value equals \`expected\`.” This allows for atomic updates without holding a lock across the entire operation.
+
+
+# Coroutines
+
+
+
+According to the GitHub, “[folly::coro](https://github.com/facebook/folly/tree/main/folly/coro) is a developer-friendly asynchronous C++ framework built on [C++20 coroutines](https://en.cppreference.com/w/cpp/language/coroutines.html).”
+
+
+
+At Meta, any service may need to handle millions of concurrent requests. If you were to assign one OS thread per request, you’d have millions of threads (for numerous services) - which each take up memory on the stack and require kernel scheduling overhead. At this scale, the hardware requirements simply become infeasible.
+
+
+
+Coroutines allow a single thread to handle several different concurrent operations by suspending work while waiting for I/O and resuming it when the result arrives. The benefit is that suspending/resuming a coroutine takes significantly less time than the context switching between threads.
+
+
+
+- [folly::coro::Task<T>](https://github.com/facebook/folly/blob/main/folly/coro/Task.h) - A Task is a function that can pause itself and resume later without blocking the OS thread it’s running on. It’s very similar to async/await in other programming languages.
+- [folly::coro::collectAll()](https://github.com/facebook/folly/blob/main/folly/coro/Collect.h) - Run multiple coroutines at the same time and wait for all of them. Like Python’s \`asyncio.gather()\` or JavaScript’s \`Promise.all()\`.
+- [folly::coro::AsyncScope](https://github.com/facebook/folly/blob/main/folly/coro/AsyncScope.h) - kicks off background work without co_awaiting it immediately. It still needs to finish before shutdown; without this, you’d have “fire and forget” coroutines that might still be running when the program exits.
+- [folly::Executor](https://github.com/facebook/folly/blob/main/folly/Executor.h) - An executor is a thread pool that coroutines are scheduled on. When a coroutine resumes after co_await, it resumes on an executor’s thread. This is the equivalent of Python’s event loop, or Go’s goroutine scheduler.
+- [folly::fibers::Semaphore](https://github.com/facebook/folly/blob/main/folly/fibers/Semaphore.h) - A regular \`std::counting_semaphore\` blocks the OS thread when you acquire() and it’s at zero. This means the thread ends up sitting idle. \`folly::fibers::Semaphore\` suspends the coroutine instead. The OS thread is free to run other coroutines while this one waits. This is how you do rate-limiting / concurrency-limiting in async code without wasting threads.
+
+
+---
+
+
+
+There are dozens of other interesting pieces of concurrency infrastructure in the folly repo, and I’ve barely scratched the surface of what even the ones here have to offer. If you’re interested in really in-depth technical problems, I suggest checking it out!
+
+
+
+---
+
+
+
+#### Subscribe to Liam Brem
+
+Launched 6 months agoSubscribedBy subscribing, you agree Substack's [Terms of Use](https://substack.com/tos), and acknowledge its [Information Collection Notice](https://substack.com/ccpa#personal-data-collected) and [Privacy Policy](https://substack.com/privacy).[![Billy Qian's avatar](https://substackcdn.com/image/fetch/$s_!R1ky!,w_32,h_32,c_fill,f_webp,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F59f90047-41c8-48d9-b9d1-8087f544f899_1167x1047.png)](https://substack.com/profile/424076432-billy-qian)[![Liam Brem's avatar](https://substackcdn.com/image/fetch/$s_!xsUi!,w_32,h_32,c_fill,f_webp,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F5a4e9705-3f70-4aef-9f72-cfe56427fec5_3106x3106.jpeg)](https://substack.com/profile/476691674-liam-brem)[2 Likes]()[](https://substack.com/note/p-209952809/restacks?utm_source=substack&utm_content=facepile-restacks)
+`;export{e as default};
